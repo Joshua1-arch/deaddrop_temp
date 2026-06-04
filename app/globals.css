@@ -2,26 +2,69 @@
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
+@layer base {
+  body {
+    background-color: #0A0A0F;
+    color: #F0F0F0;
+    font-family: var(--font-inter), sans-serif;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+  h1, h2, h3, h4, h5, h6 {
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    color: #F0F0F0;
   }
 }
 
-body {
-  color: var(--foreground);
-  background: var(--background);
-  font-family: Arial, Helvetica, sans-serif;
+@layer utilities {
+  .hero-radial-glow {
+    background: radial-gradient(ellipse at top, rgba(0, 212, 180, 0.08) 0%, transparent 60%);
+  }
+
+  .glow-hover:hover {
+    box-shadow: 0 0 0 2px rgba(0, 212, 180, 0.3);
+  }
+
+  .glow-focus:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px rgba(0, 212, 180, 0.3);
+  }
+
+  .custom-scrollbar::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  
+  .custom-scrollbar::-webkit-scrollbar-track {
+    background: #0A0A0F;
+  }
+  
+  .custom-scrollbar::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.08);
+    border-radius: 3px;
+  }
+  
+  .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: rgba(0, 212, 180, 0.3);
+  }
 }
 
-@layer utilities {
-  .text-balance {
-    text-wrap: balance;
+@layer components {
+  .btn-primary {
+    @apply rounded-lg bg-accent-primary text-background-primary font-semibold transition-all hover:brightness-110 active:scale-95 px-5 py-2.5 flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 disabled:pointer-events-none;
+  }
+
+  .btn-secondary {
+    @apply rounded-lg bg-transparent border border-accent-primary text-accent-primary font-semibold transition-all hover:bg-accent-primary/10 active:scale-95 px-5 py-2.5 flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 disabled:pointer-events-none;
+  }
+
+  .btn-muted {
+    @apply rounded-lg bg-transparent border border-white/10 text-text-secondary font-medium transition-all hover:bg-white/5 hover:text-text-primary active:scale-95 px-5 py-2.5 flex items-center justify-center gap-2 cursor-pointer;
+  }
+
+  .card-custom {
+    @apply bg-background-card border border-white/5 rounded-xl p-6 transition-all duration-300 hover:border-accent-primary/20 hover:shadow-accent-glow;
   }
 }
