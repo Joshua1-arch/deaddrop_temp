@@ -10,7 +10,7 @@ Whistleblowers, journalists, and vulnerable sources face extreme risks when rele
 1. **Centralized Exposure**: Storing sensitive leaks on standard servers exposes sources to subpoena, physical raid, or host takedown.
 2. **Premature Exposure**: Releasing data too early can derail investigative campaigns or tip off malicious entities.
 3. **Data Tampering & Modification**: Traditional file-sharing hosts can alter document contents, destroy evidence, or retroactively inject backdoors.
-4. **Active Tracking**: Third-party databases log IP addresses, access tokens, and traffic details, Deanonymizing sources.
+4. **Active Tracking**: Third-party databases log IP addresses, access tokens, and traffic details, Deanonymizing sourcxes.
 
 ---
 
@@ -65,12 +65,47 @@ Crucially, the decryption key is kept strictly by the user during the time-lock 
 
 ---
 
+## 🔑 Signature-Derived ECIES Key Wrapping & Auto-Decryption
+
+To bypass the limitation that standard Sui wallets only support signing (Ed25519/Secp256k1) and lack native decryption capabilities, DeadDrop implements a zero-trust **Signature-Derived ECIES (Elliptic Curve Integrated Encryption Scheme)** envelope protocol:
+
+### The Flow:
+1. **Inbox Activation (P-256 Generation)**:
+   - A recipient activates their **Secure Inbox** by signing a static on-chain message: `"Activate DeadDrop Inbox v1"`.
+   - The signature bytes are hashed using SHA-256 and used to seed a new, local **ECDH P-256 key pair** in the browser.
+   - The P-256 private key is encrypted (AES-256-GCM) with the signature-derived seed.
+   - The encrypted private key (hex) and the raw public key bytes are stored on-chain as a `DEADDROP_PROFILE` publication object.
+2. **ECIES Key Wrapping (Publishing)**:
+   - When a whistleblower publishes a document to a recipient address, the app fetches the recipient's `DEADDROP_PROFILE` public key from Sui.
+   - The app encrypts the document with a unique AES-256 key.
+   - An ephemeral P-256 key pair is generated to compute a shared secret via ECDH with the recipient's public key.
+   - The shared secret encrypts the document's AES key.
+   - The final payload containing: `[ephemeralPublicKey (65 bytes) || iv (12 bytes) || encryptedAESKey]` is uploaded to the Move contract as the `wrapped_key` metadata field.
+3. **Decryption with My Wallet (Unwrapping)**:
+   - The recipient connects their wallet to `/verify/[id]`.
+   - The recipient clicks **"Decrypt with My Wallet"** and signs the activation message.
+   - The signature-derived key decrypts their private P-256 key stored on-chain.
+   - The recipient's private key performs ECDH with the ephemeral public key from the on-chain wrapper, deriving the shared secret to decrypt the AES key, which unlocks the document locally.
+
+---
+
+## 🛠️ Tatum SDK & Webhook Notifications
+
+We integrated the **Tatum Gateway & Notification API** to power transaction monitoring and automated event streams:
+
+- **Sui Testnet gateway routing**: routes RPC and ledger queries through Tatum RPC network endpoints.
+- **Tatum Webhook Subscriptions**: Users can configure webhooks to subscribe to publication transaction triggers (`tatum.notification.subscribe`) for real-time mutation alerts.
+- **Live Webhook Event Logger Console**: Built an interactive console directly in the user dashboard that polls and displays incoming Tatum webhook notifications in real-time.
+- **Simulated Webhook Playground**: Integrated a simulation engine that generates sample Tatum `OBJECT_MUTATED` payloads so judges can inspect the webhook payload structure directly on the screen without configuring port-forwarding tools.
+
+---
+
 ## 🔌 Endpoints & Integration Configuration
 
 ### Hackathon Metadata
-- **Live demo**: http://localhost:3000 (local)
-- **Contract**: https://suiscan.xyz/testnet/package/0xd091f0bbb8ec8e0dd1de59f430572dfd8e08ff8938b2cb7b751af496eb51b902
-- **Deployment TX**: https://suiscan.xyz/testnet/tx/583zXh94pftxbTejvU3vCZQ1WzR4FnAG4xVyKQ8SP4Hu
+- **Live Demo**: http://localhost:3000 (local)
+- **Contract Package**: https://suiscan.xyz/testnet/package/0xef840f86eb52e8dccd2d321bffbf34c6151b31dc8daa5e37302908f09044d504
+- **Deployment Transaction**: https://suiscan.xyz/testnet/tx/AFM48bBa9xzQvYk7LhP1XZ3t4heENqUaNkc9XPHyoLUo
 
 ### Walrus Testnet Nodes
 - **Publisher Node**: `https://publisher.walrus-testnet.walrus.space` (PUT uploads)
@@ -80,5 +115,5 @@ Crucially, the decryption key is kept strictly by the user during the time-lock 
 - **RPC Endpoint**: `https://sui-testnet.gateway.tatum.io/`
 
 ### Move Smart Contract Package
-- **Sui Testnet Package ID**: `0xd091f0bbb8ec8e0dd1de59f430572dfd8e08ff8938b2cb7b751af496eb51b902`
+- **Sui Testnet Package ID**: `0xef840f86eb52e8dccd2d321bffbf34c6151b31dc8daa5e37302908f09044d504`
 - **System Clock ID**: `0x6`

@@ -1,10 +1,12 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { getPublication } from "@/lib/sui";
 import { fetchFromWalrus } from "@/lib/walrus";
 import { decryptDocument } from "@/lib/crypto";
 import { Publication } from "@/types/publication";
+import { useWallet } from "@/components/WalletProvider";
+import { useCurrentAccount, useSignPersonalMessage } from "@mysten/dapp-kit";
 import StatusBadge from "@/components/StatusBadge";
 import CountdownTimer from "@/components/CountdownTimer";
 import CopyButton from "@/components/CopyButton";
@@ -72,6 +74,9 @@ function detectFileType(bytes: Uint8Array): 'pdf' | 'image' | 'text' {
 
 export default function VerifyPage({ params }: VerifyPageProps) {
   const documentId = params.id;
+  const { isConnected, connect, address } = useWallet();
+  const account = useCurrentAccount();
+  const { mutateAsync: signPersonalMessage } = useSignPersonalMessage();
   const [loading, setLoading] = useState(true);
   const [publication, setPublication] = useState<Publication | null>(null);
   const [isAccessible, setIsAccessible] = useState(false);
@@ -84,6 +89,8 @@ export default function VerifyPage({ params }: VerifyPageProps) {
   const [detectedType, setDetectedType] = useState<'pdf' | 'image' | 'text' | null>(null);
   const [objectUrl, setObjectUrl] = useState<string | null>(null);
   const [decryptionError, setDecryptionError] = useState("");
+  const [autoDecryptStatus, setAutoDecryptStatus] = useState("");
+  const [isAutoDecrypting, setIsAutoDecrypting] = useState(false);
 
   // Load publication details from Sui blockchain
   useEffect(() => {
@@ -119,6 +126,100 @@ export default function VerifyPage({ params }: VerifyPageProps) {
     }
     loadPublication();
   }, [documentId]);
+
+  const [showRecipientVerified, setShowRecipientVerified] = useState(false);
+
+  const handleDecryptWithWallet = async () => {
+    if (!publication) return;
+    
+    // For the demo, show the recipient address check first:
+    if (account?.address !== publication.recipient) {
+      setDecryptionError(
+        'This document was encrypted for a ' +
+        'different wallet address.'
+      );
+      return;
+    }
+
+    // Show success: wallet is the intended recipient
+    // Then prompt for manual key input as fallback
+    // since Sui wallets don't expose private keys
+    // via the standard dapp-kit API
+    setShowRecipientVerified(true);
+    setDecryptionError("");
+  };
+
+  const handleAutoDecrypt = useCallback(async () => {
+    try {
+      setIsAutoDecrypting(true);
+      setDecryptionError("");
+      setAutoDecryptStatus('Fetching document from Walrus...');
+      
+      // 1. Fetch encrypted blob from Walrus
+      const encryptedBytes = await fetchFromWalrus(publication!.blobId);
+      
+      setAutoDecryptStatus('Loading secure profile...');
+      
+      // 2. Fetch the recipient's profile to retrieve the encrypted P-256 private key
+      const { getPublicationsByOwner } = await import("@/lib/sui");
+      const pubs = await getPublicationsByOwner(account!.address);
+      const profile = pubs.find(p => p.title === "DEADDROP_PROFILE");
+      if (!profile || !profile.blobId) {
+        throw new Error("You have not activated your Secure Inbox. Please activate your inbox on the Dashboard.");
+      }
+      
+      // Parse encrypted private key hex from profile's blobId
+      const encryptedHex = profile.blobId;
+      const encryptedPrivKeyBytes = new Uint8Array(
+        encryptedHex.match(/.{1,2}/g)!.map(byte => parseInt(byte, 16))
+      );
+      
+      setAutoDecryptStatus('Confirm signature to unlock your inbox...');
+      
+      // Prompt user to sign the message to derive their inbox AES key
+      const messageText = "Activate DeadDrop Inbox v1";
+      const messageBytes = new TextEncoder().encode(messageText);
+      const signResult = await signPersonalMessage({ message: messageBytes });
+      
+      const signatureBytes = new Uint8Array(
+        atob(signResult.signature).split("").map(c => c.charCodeAt(0))
+      );
+      
+      setAutoDecryptStatus('Decrypting secure keys...');
+      
+      // Derive AES key from signature
+      const { deriveKeyFromSignature, decryptPrivateKeyBytes, unwrapKeyWithWallet } = await import("@/lib/crypto");
+      const aesKey = await deriveKeyFromSignature(signatureBytes);
+      
+      // Decrypt the P-256 private key bytes
+      const p256PrivateKeyBytes = await decryptPrivateKeyBytes(encryptedPrivKeyBytes, aesKey);
+      
+      // Use the P-256 private key to unwrap the document's AES key
+      const docAesKey = await unwrapKeyWithWallet(
+        new Uint8Array(publication!.wrappedKey!),
+        p256PrivateKeyBytes
+      );
+      
+      setAutoDecryptStatus('Decrypting document...');
+      
+      // 3. Decrypt the document
+      const decrypted = await decryptDocument(encryptedBytes, docAesKey);
+      
+      // 4. Detect file type and display
+      setDecryptedBytes(decrypted);
+      setDecryptionKey(docAesKey);
+      setAutoDecryptStatus('');
+      setIsAutoDecrypting(false);
+      
+    } catch (err: any) {
+      console.error("[Verify] Auto-decryption failed:", err);
+      setAutoDecryptStatus('');
+      setIsAutoDecrypting(false);
+      setDecryptionError(err.message || 'Auto-decryption failed. Please enter your key manually.');
+    }
+  }, [publication, account, signPersonalMessage]);
+
+
 
   // Handle activeUrl updates
   useEffect(() => {
@@ -385,53 +486,148 @@ export default function VerifyPage({ params }: VerifyPageProps) {
           </div>
         ) : (
           /* Unlocked Decryption Form */
-          <div className="space-y-4 border-t border-white/5 pt-6">
+          <div className="space-y-6 border-t border-white/5 pt-6">
             {!decryptedBytes ? (
-              <form onSubmit={handleDecrypt} className="space-y-4">
-                <div className="space-y-2">
-                  <label className="block text-xs font-mono font-semibold uppercase tracking-wider text-text-secondary">
-                    Enter Decryption Key to Read Document
-                  </label>
-                  <div className="flex flex-col sm:flex-row gap-2">
-                    <input
-                      type="password"
-                      placeholder="e.g. dd-key-..."
-                      value={decryptionKey}
-                      onChange={(e) => setDecryptionKey(e.target.value)}
-                      className="flex-1 bg-background-secondary border border-white/10 rounded-lg px-4 py-2.5 text-sm text-text-primary placeholder:text-text-muted focus:border-accent-primary outline-none transition-all"
-                    />
-                    <button
-                      type="submit"
-                      disabled={isDecrypting}
-                      className="btn-primary py-2.5 px-6 text-sm font-semibold shrink-0"
-                    >
-                      {isDecrypting ? (
-                        <>
-                          <Loader2 size={16} className="animate-spin" />
-                          <span>Decrypting...</span>
-                        </>
-                      ) : (
-                        <span>Decrypt & View</span>
-                      )}
-                    </button>
-                  </div>
-                </div>
+              // If publication has a recipient address
+              publication.recipient && 
+              publication.recipient !== '0x0000000000000000000000000000000000000000000000000000000000000000' ? (
+                <div className="space-y-4">
+                  {/* Status Box */}
+                  <div className="p-4 bg-background-secondary border border-white/5 rounded-xl space-y-3 text-xs font-mono">
+                    <div className="text-accent-secondary font-semibold uppercase tracking-wider flex items-center gap-1.5">
+                      <Lock size={14} />
+                      Wallet-to-Wallet Locked Document
+                    </div>
+                    <div className="text-text-secondary leading-relaxed font-sans">
+                      This document&apos;s decryption key is sealed for a specific recipient wallet:
+                      <code className="block bg-background-primary px-2 py-1.5 rounded text-accent-primary mt-1 select-all break-all text-xs font-mono">
+                        {publication.recipient}
+                      </code>
+                    </div>
 
-                {decryptionError && (
-                  <div className="flex items-center gap-2 p-3 bg-danger/10 border border-danger/20 rounded-lg text-danger text-xs font-semibold font-mono">
-                    <AlertCircle size={14} className="shrink-0" />
-                    <span>{decryptionError}</span>
+                    {!isConnected ? (
+                      <div className="space-y-3 pt-2">
+                        <p className="text-text-muted font-sans font-semibold">
+                          Connect your wallet to auto-decrypt
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => connect()}
+                          className="btn-primary py-2 px-4 text-xs font-semibold inline-flex items-center gap-1.5"
+                        >
+                          Connect Wallet
+                        </button>
+                      </div>
+                    ) : account?.address?.toLowerCase() === publication.recipient.toLowerCase() ? (
+                      isAutoDecrypting ? (
+                        <div className="flex items-center gap-2 text-accent-primary pt-2 font-sans font-semibold">
+                          <Loader2 size={16} className="animate-spin" />
+                          <span>{autoDecryptStatus}</span>
+                        </div>
+                      ) : (
+                        <div className="space-y-3 pt-2">
+                          <div className="text-accent-primary font-sans font-semibold flex items-center gap-1.5">
+                            ✓ Your wallet is the intended recipient
+                          </div>
+                          <button
+                            type="button"
+                            onClick={handleAutoDecrypt}
+                            className="btn-secondary py-2 px-4 text-xs font-semibold"
+                          >
+                            Decrypt with My Wallet
+                          </button>
+                        </div>
+                      )
+                    ) : (
+                      <div className="space-y-3 pt-2">
+                        <div className="text-[#FF4D4D] font-sans font-semibold">
+                          This document was encrypted for a different wallet address.
+                        </div>
+                        <p className="text-text-secondary font-sans leading-relaxed">
+                          Connected wallet address: <code className="bg-background-primary px-1.5 py-0.5 rounded text-[11px] text-[#FF4D4D]">{account?.address}</code>
+                        </p>
+                      </div>
+                    )}
                   </div>
-                )}
-                
-                {/* Note for testing demo key */}
-                {documentId === "unlocked-demo" && (
-                  <div className="p-3 bg-accent-primary/5 border border-accent-primary/10 rounded-lg text-xs leading-relaxed text-text-secondary font-mono">
-                    <span className="text-accent-primary font-semibold">Demo Decryption Key:</span>{" "}
-                    <code>dd-key-4f2a-b9c8-0d1e-2f3a-4b5c-6d7e</code> (Click copy button in dashboard or input directly to decrypt).
+
+                  {/* Manual input fallback */}
+                  <form onSubmit={handleDecrypt} className="space-y-4 pt-4 border-t border-white/5">
+                    <div className="space-y-2">
+                      <label className="block text-xs font-mono font-semibold uppercase tracking-wider text-text-secondary">
+                        Or enter Decryption Key manually:
+                      </label>
+                      <div className="flex flex-col sm:flex-row gap-2">
+                        <input
+                          type="password"
+                          placeholder="e.g. dd-key-..."
+                          value={decryptionKey}
+                          onChange={(e) => setDecryptionKey(e.target.value)}
+                          className="flex-1 bg-background-secondary border border-white/10 rounded-lg px-4 py-2.5 text-sm text-text-primary placeholder:text-text-muted focus:border-accent-primary outline-none transition-all"
+                        />
+                        <button
+                          type="submit"
+                          disabled={isDecrypting}
+                          className="btn-primary py-2.5 px-6 text-sm font-semibold shrink-0"
+                        >
+                          {isDecrypting ? (
+                            <>
+                              <Loader2 size={16} className="animate-spin" />
+                              <span>Decrypting...</span>
+                            </>
+                          ) : (
+                            <span>Decrypt & View</span>
+                          )}
+                        </button>
+                      </div>
+                    </div>
+                    {decryptionError && (
+                      <div className="flex items-center gap-2 p-3 bg-danger/10 border border-danger/20 rounded-lg text-danger text-xs font-semibold font-mono">
+                        <AlertCircle size={14} className="shrink-0" />
+                        <span>{decryptionError}</span>
+                      </div>
+                    )}
+                  </form>
+                </div>
+              ) : (
+                // Public Document (No Recipient)
+                <form onSubmit={handleDecrypt} className="space-y-4">
+                  <div className="space-y-2">
+                    <label className="block text-xs font-mono font-semibold uppercase tracking-wider text-text-secondary">
+                      Enter Decryption Key to Read Document
+                    </label>
+                    <div className="flex flex-col sm:flex-row gap-2">
+                      <input
+                        type="password"
+                        placeholder="e.g. dd-key-..."
+                        value={decryptionKey}
+                        onChange={(e) => setDecryptionKey(e.target.value)}
+                        className="flex-1 bg-background-secondary border border-white/10 rounded-lg px-4 py-2.5 text-sm text-text-primary placeholder:text-text-muted focus:border-accent-primary outline-none transition-all"
+                      />
+                      <button
+                        type="submit"
+                        disabled={isDecrypting}
+                        className="btn-primary py-2.5 px-6 text-sm font-semibold shrink-0"
+                      >
+                        {isDecrypting ? (
+                          <>
+                            <Loader2 size={16} className="animate-spin" />
+                            <span>Decrypting...</span>
+                          </>
+                        ) : (
+                          <span>Decrypt & View</span>
+                        )}
+                      </button>
+                    </div>
                   </div>
-                )}
-              </form>
+
+                  {decryptionError && (
+                    <div className="flex items-center gap-2 p-3 bg-danger/10 border border-danger/20 rounded-lg text-danger text-xs font-semibold font-mono">
+                      <AlertCircle size={14} className="shrink-0" />
+                      <span>{decryptionError}</span>
+                    </div>
+                  )}
+                </form>
+              )
             ) : (
               /* Decrypted Content Box */
               <div className="space-y-4 animate-fadeIn">

@@ -3,6 +3,7 @@
 import React, { useState } from "react";
 import { Info, ShieldCheck, ArrowLeft, Key, Check, Download } from "lucide-react";
 import CopyButton from "../CopyButton";
+import { getStorageCostEstimate } from "@/lib/walrus";
 
 interface Step3Props {
   data: {
@@ -109,18 +110,39 @@ export default function Step3Confirm({ data, onPublish, onBack }: Step3Props) {
       </div>
 
       {/* Network Cost Box */}
-      <div className="bg-background-secondary border border-white/5 rounded-xl p-5 space-y-3">
-        <h4 className="text-xs font-mono font-semibold uppercase tracking-wider text-text-secondary">
-          Network Cost
-        </h4>
-        <div className="flex items-baseline gap-2">
-          <span className="text-2xl font-bold text-accent-secondary font-mono">0.01 SUI</span>
-          <span className="text-xs text-text-muted">+ Walrus storage fees</span>
-        </div>
-        <p className="text-xs text-text-muted font-mono leading-relaxed">
-          Immutable storage secured by Sui network consensus.
-        </p>
-      </div>
+      {(() => {
+        const costEst = data.file 
+          ? getStorageCostEstimate(data.file.size, 5) 
+          : { walCost: "0.0000 WAL", usdCost: "$0.0000 USD" };
+
+        return (
+          <div className="bg-background-secondary border border-white/5 rounded-xl p-5 space-y-4">
+            <div className="space-y-1">
+              <h4 className="text-xs font-mono font-semibold uppercase tracking-wider text-text-secondary">
+                Estimated Registry Cost
+              </h4>
+              <div className="flex items-baseline gap-2">
+                <span className="text-2xl font-bold text-accent-secondary font-mono">0.01 SUI</span>
+                <span className="text-xs text-text-muted">Sui transaction gas fee</span>
+              </div>
+            </div>
+
+            <div className="space-y-1 pt-3 border-t border-white/5">
+              <h4 className="text-xs font-mono font-semibold uppercase tracking-wider text-text-secondary">
+                Walrus Storage Fee (5 Epochs / 70 Days)
+              </h4>
+              <div className="flex flex-col sm:flex-row sm:items-baseline gap-1 sm:gap-2">
+                <span className="text-xl font-bold text-accent-primary font-mono">{costEst.walCost}</span>
+                <span className="text-xs text-text-muted">({costEst.usdCost})</span>
+              </div>
+            </div>
+
+            <p className="text-xs text-text-muted font-mono leading-relaxed">
+              Sui gas covers metadata anchoring. Walrus fees cover actual decentralized data retention.
+            </p>
+          </div>
+        );
+      })()}
 
       {/* Action Buttons */}
       <div className="pt-4 flex items-center justify-between gap-4 font-sans">

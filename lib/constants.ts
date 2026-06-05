@@ -76,6 +76,6 @@ export const MOCK_DASHBOARD_PUBLICATIONS: Publication[] = [
 export const TATUM_RPC_URL = 'https://sui-testnet.gateway.tatum.io';
 export const TATUM_API_KEY = process.env.NEXT_PUBLIC_TATUM_API_KEY || '';
 export const TATUM_DATA_API_URL = 'https://api.tatum.io/v4';
-export const PACKAGE_ID = process.env.NEXT_PUBLIC_PACKAGE_ID || "0xd091f0bbb8ec8e0dd1de59f430572dfd8e08ff8938b2cb7b751af496eb51b902";
+export const PACKAGE_ID = process.env.NEXT_PUBLIC_PACKAGE_ID || "0xef840f86eb52e8dccd2d321bffbf34c6151b31dc8daa5e37302908f09044d504";
 export const CLOCK_OBJECT_ID = "0x6";
 

@@ -12,6 +12,8 @@ export interface Publication {
   fileSize?: string;
   fileType?: string;
   decryptionKey?: string; // Generated client-side key for unlocked items
+  wrappedKey?: Uint8Array; // Encrypted AES key wrapped with recipient's public key
+  recipient?: string; // Recipient's Sui address
 }
 
 export type Category = 
@@ -28,6 +30,7 @@ export interface PublishParams {
   description: string;
   file: File;
   unlockAt: string; // ISO string representing unlock time
+  recipientAddress?: string; // Optional recipient's Sui address
 }
 
 export interface PublishResult {

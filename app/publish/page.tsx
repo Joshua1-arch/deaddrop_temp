@@ -38,6 +38,10 @@ export default function PublishPage() {
     unlockType: "now" as "now" | "30days" | "1year" | "custom",
     customUnlockDate: "",
     decryptionKey: "",
+    subscribeWebhook: false,
+    webhookUrl: "",
+    recipientAddress: "",
+    decryptAccess: "public" as "public" | "recipient",
   });
 
   // Loading States
@@ -63,23 +67,6 @@ export default function PublishPage() {
       }
     }
     initKey();
-
-    if (typeof window !== "undefined") {
-      const params = new URLSearchParams(window.location.search);
-      if (params.get("mockWallet") === "true") {
-        const dummyFile = new File(
-          ["This is the secret content of the test leak document. DeadDrop storage integration works!"],
-          "secret_leak_report.txt",
-          { type: "text/plain" }
-        );
-        setFormData((prev) => ({
-          ...prev,
-          title: prev.title || "Secret Leak Report",
-          description: prev.description || "Highly confidential document regarding organizational irregularities.",
-          file: dummyFile,
-        }));
-      }
-    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -134,6 +121,7 @@ export default function PublishPage() {
           description: formData.description,
           file: formData.file,
           unlockAt,
+          recipientAddress: formData.decryptAccess === "recipient" ? formData.recipientAddress : undefined,
         },
         signAndExecuteTransaction,
         (step, detail) => {
@@ -148,6 +136,17 @@ export default function PublishPage() {
           }
         }
       );
+
+      // Optional: Tatum Webhook Notification Subscription
+      if (formData.subscribeWebhook && formData.webhookUrl.trim()) {
+        try {
+          setLoadingMessage("Setting up Tatum webhook notifications...");
+          const { subscribeToTatumNotifications } = await import("@/lib/sui");
+          await subscribeToTatumNotifications(result.objectId, formData.webhookUrl.trim());
+        } catch (webhookErr) {
+          console.error("Failed to subscribe to Tatum notifications:", webhookErr);
+        }
+      }
 
       // Save key back to formData for compatibility
       updateFormData({ decryptionKey: result.decryptionKey });

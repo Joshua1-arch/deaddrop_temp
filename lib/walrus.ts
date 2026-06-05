@@ -59,13 +59,27 @@ export async function fetchFromWalrus(
   return new Uint8Array(arrayBuffer);
 }
 
-// Human readable storage cost estimate
+// Human readable storage cost estimate in WAL and USD
 export function getStorageCostEstimate(
   fileSizeBytes: number,
   epochs: number = 5
-): string {
+): { walCost: string; usdCost: string } {
   // ~0.01 WAL per MB per epoch
   const sizeInMB = fileSizeBytes / (1024 * 1024);
-  const cost = sizeInMB * 0.01 * epochs;
-  return `~${cost.toFixed(4)} WAL`;
+  const walCostVal = sizeInMB * 0.01 * epochs;
+  const walCost = `~${walCostVal.toFixed(4)} WAL`;
+
+  // Walrus pricing: $0.023 USD / GB / month.
+  // One epoch is 14 days (approx 0.4599 months).
+  // Cost = (size in GB) * 0.023 * (14 / 30.4375) * epochs
+  const sizeInGB = fileSizeBytes / (1024 * 1024 * 1024);
+  const months = (epochs * 14) / 30.4375;
+  const usdCostVal = sizeInGB * 0.023 * months;
+  
+  // Show at least 4 decimal places if it's very small
+  const usdCost = usdCostVal < 0.0001 
+    ? `< $0.0001 USD` 
+    : `~$${usdCostVal.toFixed(4)} USD`;
+
+  return { walCost, usdCost };
 }

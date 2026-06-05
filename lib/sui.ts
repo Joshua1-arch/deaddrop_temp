@@ -1,10 +1,9 @@
 // Sui Network Blockchain RPC functions & smart contract integrations using Tatum RPC
-import { SuiJsonRpcClient as SuiClient, JsonRpcHTTPTransport } from '@mysten/sui/jsonRpc';
+import { SuiJsonRpcClient as SuiClient } from '@mysten/sui/jsonRpc';
 import { Transaction } from '@mysten/sui/transactions';
 import { Publication } from '@/types/publication';
 import { 
   TATUM_API_KEY, 
-  TATUM_RPC_URL,
   PACKAGE_ID,
   CLOCK_OBJECT_ID 
 } from './constants';
@@ -18,13 +17,11 @@ function getSuiClient(): SuiClient {
   return new SuiClient({ url: rpcUrl, network: 'testnet' });
 }
 
-
-const CUSTOM_PUBS_KEY = 'deaddrop_custom_publications';
-
-export function getCustomPublications(): Record<string, Publication> {
-  if (typeof window === 'undefined') return {};
-  const data = localStorage.getItem(CUSTOM_PUBS_KEY);
-  return data ? JSON.parse(data) : {};
+function checkPackageId() {
+  const isZeroPackage = PACKAGE_ID === '0x0000000000000000000000000000000000000000' || !PACKAGE_ID.startsWith('0x') || PACKAGE_ID.length < 10;
+  if (isZeroPackage) {
+    throw new Error('Contract not deployed. Set NEXT_PUBLIC_PACKAGE_ID');
+  }
 }
 
 // Get current Sui epoch number
@@ -60,6 +57,7 @@ export async function getChainTimestamp(): Promise<number> {
   }
 }
 
+
 // Create a publication on-chain
 // Returns transaction digest
 export async function createPublication(params: {
@@ -68,48 +66,26 @@ export async function createPublication(params: {
   title: string;
   category: string;
   unlockAtMs: number;
+  wrappedKey?: Uint8Array;
+  recipient?: string;
   signAndExecute: (options: { transaction: any }) => Promise<any>; // from dapp-kit
 }): Promise<{ digest: string; objectId: string }> {
-  const isMock = typeof window !== 'undefined' && window.location.search.includes('mockWallet=true');
-  const isZeroPackage = PACKAGE_ID === '0x0000000000000000000000000000000000000000' || !PACKAGE_ID.startsWith('0x') || PACKAGE_ID.length < 10;
-  if (isMock || isZeroPackage) {
-    if (isZeroPackage) {
-      console.warn('⚠️ PACKAGE_ID not set. Deploy contract and update .env.local');
-    }
-    if (isMock) {
-      const mockObjId = '0x' + Array.from(crypto.getRandomValues(new Uint8Array(32))).map(b => b.toString(16).padStart(2, '0')).join('');
-      const mockDigest = '0x' + Array.from(crypto.getRandomValues(new Uint8Array(32))).map(b => b.toString(16).padStart(2, '0')).join('');
-      
-      const newPub: Publication = {
-        id: mockObjId,
-        title: params.title,
-        category: params.category,
-        description: 'Decentralized document published on Sui & Walrus (Simulation Mode)',
-        blobId: params.blobId,
-        txHash: mockDigest,
-        publisher: '0x' + 'f'.repeat(64),
-        createdAt: new Date().toISOString(),
-        unlockAt: new Date(params.unlockAtMs).toISOString(),
-        isLocked: params.unlockAtMs > Date.now(),
-        fileSize: 'Unknown size',
-        fileType: 'application/octet-stream',
-      };
-      
-      return { digest: mockDigest, objectId: mockObjId };
-    } else {
-      throw new Error('⚠️ PACKAGE_ID is not configured. Please deploy the smart contract and configure NEXT_PUBLIC_PACKAGE_ID.');
-    }
-  }
+  checkPackageId();
 
   const tx = new Transaction();
   tx.moveCall({
     target: `${PACKAGE_ID}::publication::create_publication`,
     arguments: [
-      tx.pure.string(params.blobId),
-      tx.pure.string(params.sha256Hash),
-      tx.pure.string(params.title),
-      tx.pure.string(params.category),
+      tx.pure.vector("u8", Array.from(new TextEncoder().encode(params.blobId))),
+      tx.pure.vector("u8", Array.from(new TextEncoder().encode(params.sha256Hash))),
+      tx.pure.vector("u8", Array.from(new TextEncoder().encode(params.title))),
+      tx.pure.vector("u8", Array.from(new TextEncoder().encode(params.category))),
       tx.pure.u64(params.unlockAtMs),
+      tx.pure.vector("u8", Array.from(params.wrappedKey || new Uint8Array(0))),
+      tx.pure.address(
+        params.recipient || 
+        '0x0000000000000000000000000000000000000000000000000000000000000000'
+      ),
       tx.object(CLOCK_OBJECT_ID),
     ],
   });
@@ -144,31 +120,11 @@ export async function createPublication(params: {
 
 // Try to unlock a publication
 // Anyone can call this
-// tryUnlock() is available but NOT called 
-// from the verify page UI.
-// It can be called manually by the publisher
-// from their dashboard if they want to 
-// update the on-chain locked field.
-// The verify page determines accessibility
-// client-side using the unlockAt timestamp.
 export async function tryUnlock(
   publicationObjectId: string,
   signAndExecute: (options: { transaction: any }) => Promise<any>
 ): Promise<string> {
-  const isZeroPackage = PACKAGE_ID === '0x0000000000000000000000000000000000000000' || !PACKAGE_ID.startsWith('0x') || PACKAGE_ID.length < 10;
-  if (isZeroPackage) {
-    console.warn('⚠️ PACKAGE_ID not set. Deploy contract and update .env.local');
-    const isMock = typeof window !== 'undefined' && window.location.search.includes('mockWallet=true');
-    if (isMock) {
-      const customPubs = getCustomPublications();
-      if (customPubs[publicationObjectId]) {
-        customPubs[publicationObjectId].isLocked = false;
-        localStorage.setItem(CUSTOM_PUBS_KEY, JSON.stringify(customPubs));
-      }
-      return '0x_mock_unlock_digest';
-    }
-    throw new Error('⚠️ PACKAGE_ID is not configured. Please deploy the smart contract and configure NEXT_PUBLIC_PACKAGE_ID.');
-  }
+  checkPackageId();
 
   const tx = new Transaction();
   tx.moveCall({
@@ -185,11 +141,6 @@ export async function tryUnlock(
   try {
     const client = getSuiClient();
     await client.waitForTransaction({ digest: response.digest });
-    const customPubs = getCustomPublications();
-    if (customPubs[publicationObjectId]) {
-      customPubs[publicationObjectId].isLocked = false;
-      localStorage.setItem(CUSTOM_PUBS_KEY, JSON.stringify(customPubs));
-    }
   } catch (err) {
     console.error('[Sui] Error waiting for unlock transaction indexing:', err);
   }
@@ -201,14 +152,7 @@ export async function tryUnlock(
 export async function getPublication(
   objectId: string
 ): Promise<Publication | null> {
-  const cachedPubs = getCustomPublications();
-  const cachedPub = cachedPubs[objectId];
-
-  const isZeroPackage = PACKAGE_ID === '0x0000000000000000000000000000000000000000' || !PACKAGE_ID.startsWith('0x') || PACKAGE_ID.length < 10;
-  if (isZeroPackage) {
-    console.warn('⚠️ PACKAGE_ID not set. Deploy contract and update .env.local');
-    return cachedPub || null;
-  }
+  checkPackageId();
 
   try {
     const client = getSuiClient();
@@ -219,62 +163,66 @@ export async function getPublication(
 
     if (response.error || !response.data || !response.data.content) {
       console.warn(`[Sui] Object ${objectId} not found or has no content:`, response.error);
-      return cachedPub || null;
+      return null;
     }
 
     const content = response.data.content;
     if (content.dataType !== 'moveObject') {
-      return cachedPub || null;
+      return null;
     }
 
     const fields = content.fields as any;
     
-    const blobId = fields.blob_id || fields.blobId || cachedPub?.blobId || '';
+    const blobId = fields.blob_id || fields.blobId || '';
     const sha256hash = fields.sha_256_hash || fields.sha256hash || '';
-    const ownerAddr = fields.owner || fields.ownerAddr || cachedPub?.publisher || '';
+    const ownerAddr = fields.owner || fields.ownerAddr || '';
     const createdAtMs = Number(fields.created_at || fields.createdAt || 0);
     const unlockAtMs = Number(fields.unlock_at || fields.unlockAt || 0);
-    const locked = fields.locked !== undefined ? fields.locked : (cachedPub?.isLocked ?? true);
-    const titleVal = fields.title || cachedPub?.title || `Document ${objectId.slice(0, 10)}`;
-    const categoryVal = fields.category || cachedPub?.category || 'Other';
+    const locked = fields.locked !== undefined ? fields.locked : true;
+    const titleVal = fields.title || `Document ${objectId.slice(0, 10)}`;
+    const categoryVal = fields.category || 'Other';
+    const recipientVal = fields.recipient || '';
 
-    const unlockAt = unlockAtMs ? new Date(unlockAtMs).toISOString() : (cachedPub?.unlockAt || new Date().toISOString());
-    const createdAt = createdAtMs ? new Date(createdAtMs).toISOString() : (cachedPub?.createdAt || new Date().toISOString());
+    let wrappedKeyBytes: Uint8Array | undefined;
+    if (fields.wrapped_key) {
+      if (Array.isArray(fields.wrapped_key)) {
+        wrappedKeyBytes = new Uint8Array(fields.wrapped_key.map((n: any) => Number(n)));
+      } else if (typeof fields.wrapped_key === 'string') {
+        wrappedKeyBytes = new Uint8Array(Buffer.from(fields.wrapped_key, 'base64'));
+      }
+    }
+
+    const unlockAt = unlockAtMs ? new Date(unlockAtMs).toISOString() : new Date().toISOString();
+    const createdAt = createdAtMs ? new Date(createdAtMs).toISOString() : new Date().toISOString();
 
     return {
       id: objectId,
       title: titleVal,
       category: categoryVal,
-      description: cachedPub?.description || 'Decentralized document published on Sui & Walrus.',
+      description: 'Decentralized document published on Sui & Walrus.',
       blobId,
-      txHash: cachedPub?.txHash || '',
+      txHash: '',
       publisher: ownerAddr,
       createdAt,
       unlockAt,
       isLocked: locked,
-      fileSize: cachedPub?.fileSize || 'Unknown size',
-      fileType: cachedPub?.fileType || 'application/octet-stream',
+      fileSize: 'Unknown size',
+      fileType: 'application/octet-stream',
+      wrappedKey: wrappedKeyBytes,
+      recipient: recipientVal,
     };
   } catch (error) {
     console.error(`[Sui] Error fetching publication object ${objectId}:`, error);
-    return cachedPub || null;
+    return null;
   }
 }
 
 // Get all publications by owner wallet address
-// Uses Tatum Data API / getOwnedObjects
+// Uses Tatum RPC Gateway to fetch owned objects
 export async function getPublicationsByOwner(
   ownerAddress: string
 ): Promise<Publication[]> {
-  const customPubs = Object.values(getCustomPublications()).filter(
-    (p) => p.publisher.toLowerCase() === ownerAddress.toLowerCase()
-  );
-
-  const isZeroPackage = PACKAGE_ID === '0x0000000000000000000000000000000000000000' || !PACKAGE_ID.startsWith('0x') || PACKAGE_ID.length < 10;
-  if (isZeroPackage) {
-    console.warn('⚠️ PACKAGE_ID not set. Deploy contract and update .env.local');
-    return customPubs;
-  }
+  checkPackageId();
 
   try {
     const client = getSuiClient();
@@ -295,47 +243,92 @@ export async function getPublicationsByOwner(
       if (item.data?.content?.dataType === 'moveObject') {
         const fields = item.data.content.fields as any;
         const objectId = item.data.objectId;
-        const cachedPub = customPubs.find(p => p.id === objectId);
 
-        const blobId = fields.blob_id || fields.blobId || cachedPub?.blobId || '';
-        const sha256hash = fields.sha_256_hash || fields.sha256hash || '';
-        const ownerAddr = fields.owner || fields.ownerAddr || cachedPub?.publisher || '';
+        const blobId = fields.blob_id || fields.blobId || '';
+        const ownerAddr = fields.owner || fields.ownerAddr || '';
         const createdAtMs = Number(fields.created_at || fields.createdAt || 0);
         const unlockAtMs = Number(fields.unlock_at || fields.unlockAt || 0);
-        const locked = fields.locked !== undefined ? fields.locked : (cachedPub?.isLocked ?? true);
-        const titleVal = fields.title || cachedPub?.title || `Document ${objectId.slice(0, 10)}`;
-        const categoryVal = fields.category || cachedPub?.category || 'Other';
+        const locked = fields.locked !== undefined ? fields.locked : true;
+        const titleVal = fields.title || `Document ${objectId.slice(0, 10)}`;
+        const categoryVal = fields.category || 'Other';
+        const recipientVal = fields.recipient || '';
 
-        const unlockAt = unlockAtMs ? new Date(unlockAtMs).toISOString() : (cachedPub?.unlockAt || new Date().toISOString());
-        const createdAt = createdAtMs ? new Date(createdAtMs).toISOString() : (cachedPub?.createdAt || new Date().toISOString());
+        let wrappedKeyBytes: Uint8Array | undefined;
+        if (fields.wrapped_key) {
+          if (Array.isArray(fields.wrapped_key)) {
+            wrappedKeyBytes = new Uint8Array(fields.wrapped_key.map((n: any) => Number(n)));
+          } else if (typeof fields.wrapped_key === 'string') {
+            wrappedKeyBytes = new Uint8Array(Buffer.from(fields.wrapped_key, 'base64'));
+          }
+        }
+
+        const unlockAt = unlockAtMs ? new Date(unlockAtMs).toISOString() : new Date().toISOString();
+        const createdAt = createdAtMs ? new Date(createdAtMs).toISOString() : new Date().toISOString();
 
         publications.push({
           id: objectId,
           title: titleVal,
           category: categoryVal,
-          description: cachedPub?.description || 'Decentralized document published on Sui & Walrus.',
+          description: 'Decentralized document published on Sui & Walrus.',
           blobId,
-          txHash: cachedPub?.txHash || '',
+          txHash: '',
           publisher: ownerAddr,
           createdAt,
           unlockAt,
           isLocked: locked,
-          fileSize: cachedPub?.fileSize || 'Unknown size',
-          fileType: cachedPub?.fileType || 'application/octet-stream',
+          fileSize: 'Unknown size',
+          fileType: 'application/octet-stream',
+          wrappedKey: wrappedKeyBytes,
+          recipient: recipientVal,
         });
-      }
-    }
-
-    // Merge custom localstorage mock publications that aren't already fetched from chain
-    for (const cp of customPubs) {
-      if (!publications.some(p => p.id === cp.id)) {
-        publications.push(cp);
       }
     }
 
     return publications;
   } catch (error) {
     console.error(`[Sui] Error fetching owned publications for address ${ownerAddress}:`, error);
-    return customPubs;
+    return [];
+  }
+}
+
+// Subscribe to SUI object notifications via Tatum Webhooks
+export async function subscribeToTatumNotifications(
+  objectId: string,
+  webhookUrl: string
+): Promise<any> {
+  if (!TATUM_API_KEY) {
+    console.warn("[Tatum] TATUM_API_KEY not configured, skipping notification setup");
+    return null;
+  }
+
+  console.log(`[Tatum] Subscribing to SUI object events for: ${objectId} -> Webhook: ${webhookUrl}`);
+  try {
+    const response = await fetch("https://api.tatum.io/v4/subscription", {
+      method: "POST",
+      headers: {
+        "x-api-key": TATUM_API_KEY,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        type: "ADDRESS_EVENT",
+        attr: {
+          address: objectId,
+          chain: "SUI",
+          url: webhookUrl
+        }
+      })
+    });
+
+    if (!response.ok) {
+      const errText = await response.text().catch(() => "");
+      throw new Error(`Tatum subscription API returned status ${response.status}: ${errText}`);
+    }
+
+    const result = await response.json();
+    console.log("[Tatum] Subscription successfully registered:", result);
+    return result;
+  } catch (error) {
+    console.error("[Tatum] Failed to create event subscription:", error);
+    throw error;
   }
 }

@@ -3,7 +3,7 @@
 import React, { useState, useEffect } from "react";
 import { useWallet } from "@/components/WalletProvider";
 import { getPublicationsByOwner, tryUnlock } from "@/lib/sui";
-import { useSignAndExecuteTransaction } from "@mysten/dapp-kit";
+import { useSignAndExecuteTransaction, useSignPersonalMessage } from "@mysten/dapp-kit";
 import { Publication } from "@/types/publication";
 import StatusBadge from "@/components/StatusBadge";
 import Link from "next/link";
@@ -26,22 +26,116 @@ import {
 export default function DashboardPage() {
   const { isConnected, address, connect } = useWallet();
   const { mutateAsync: signAndExecuteTransaction } = useSignAndExecuteTransaction();
+  const { mutateAsync: signPersonalMessage } = useSignPersonalMessage();
   const [loading, setLoading] = useState(true);
   const [publications, setPublications] = useState<Publication[]>([]);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [unlockingId, setUnlockingId] = useState<string | null>(null);
   
+  // Profile / Secure Inbox states
+  const [profilePub, setProfilePub] = useState<Publication | null>(null);
+  const [registering, setRegistering] = useState(false);
+
   // Share Key modal states
   const [shareKeyPubId, setShareKeyPubId] = useState<string | null>(null);
   const [enteredKey, setEnteredKey] = useState("");
   const [copiedShareMessage, setCopiedShareMessage] = useState(false);
 
+  // Tatum subscriptions states
+  const [subscriptions, setSubscriptions] = useState<any[]>([]);
+  const [showSubModal, setShowSubModal] = useState(false);
+  const [subWebhookUrl, setSubWebhookUrl] = useState("");
+  const [subPubId, setSubPubId] = useState("");
+  const [submittingSub, setSubmittingSub] = useState(false);
+
+  // Webhook live logs states
+  const [webhookLogs, setWebhookLogs] = useState<any[]>([]);
+  const [selectedLog, setSelectedLog] = useState<any | null>(null);
+  const [simulatingWebhook, setSimulatingWebhook] = useState(false);
+
+  const fetchWebhookLogs = async () => {
+    try {
+      const res = await fetch("/api/webhook-logger");
+      if (res.ok) {
+        const data = await res.json();
+        setWebhookLogs(data);
+      }
+    } catch (err) {
+      console.error("Failed to fetch webhook logs:", err);
+    }
+  };
+
+  useEffect(() => {
+    fetchWebhookLogs();
+    const interval = setInterval(fetchWebhookLogs, 3000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const loadSubscriptions = async () => {
+    try {
+      const { getSubscriptions } = await import("@/lib/tatum");
+      const list = await getSubscriptions();
+      setSubscriptions(list);
+    } catch (err) {
+      console.error("Failed to load subscriptions:", err);
+    }
+  };
+
+  const handleCreateSubscription = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!subWebhookUrl || !subPubId) return;
+    setSubmittingSub(true);
+    try {
+      const { subscribeToUnlockNotification } = await import("@/lib/tatum");
+      await subscribeToUnlockNotification(subPubId, subWebhookUrl);
+      setSubWebhookUrl("");
+      setSubPubId("");
+      setShowSubModal(false);
+      await loadSubscriptions();
+    } catch (err) {
+      console.error("Failed to subscribe:", err);
+    } finally {
+      setSubmittingSub(false);
+    }
+  };
+
+  const handleSimulateWebhookAlert = async () => {
+    setSimulatingWebhook(true);
+    try {
+      const targetPub = publications[Math.floor(Math.random() * publications.length)];
+      const targetId = targetPub ? targetPub.id : "0xef840f86eb52e8dccd2d321bffbf34c6151b31dc8daa5e37302908f09044d504";
+      const targetTitle = targetPub ? targetPub.title : "Decentralized Key Report";
+      
+      const samplePayload = {
+        type: "ADDRESS_TRANSACTION",
+        chain: "sui-testnet",
+        address: targetId,
+        txId: "0x" + Array.from({length: 64}, () => Math.floor(Math.random()*16).toString(16)).join(""),
+        timestamp: Date.now(),
+        blockNumber: Math.floor(Math.random() * 10000000),
+        publicationTitle: targetTitle,
+        status: "OBJECT_MUTATED",
+        detail: `Sui object ${targetId} was mutated (decrypted / unlocked) on-chain.`
+      };
+
+      await fetch("/api/webhook-logger", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(samplePayload),
+      });
+      await fetchWebhookLogs();
+    } catch (err) {
+      console.error("Failed to simulate webhook:", err);
+    } finally {
+      setSimulatingWebhook(false);
+    }
+  };
+
   const handleUnlockOnChain = async (pubId: string, e: React.MouseEvent) => {
     e.stopPropagation();
     setUnlockingId(pubId);
     try {
-      const isMockMode = typeof window !== "undefined" && window.location.search.includes("mockWallet=true");
-      await tryUnlock(pubId, isMockMode ? () => Promise.resolve({ digest: "mock" }) : signAndExecuteTransaction);
+      await tryUnlock(pubId, signAndExecuteTransaction);
       await loadPublications();
     } catch (err) {
       console.error("Failed to unlock publication on chain:", err);
@@ -50,12 +144,83 @@ export default function DashboardPage() {
     }
   };
 
+  const handleRegisterInbox = async () => {
+    if (!isConnected || !address) return;
+    setRegistering(true);
+    try {
+      // 1. Sign registration message to derive key pair
+      const messageText = "Activate DeadDrop Inbox v1";
+      const messageBytes = new TextEncoder().encode(messageText);
+      const signResult = await signPersonalMessage({ message: messageBytes });
+      
+      const signatureBytes = new Uint8Array(
+        atob(signResult.signature).split("").map(c => c.charCodeAt(0))
+      );
+      
+      // 2. Generate random P-256 key pair
+      const keyPair = await globalThis.crypto.subtle.generateKey(
+        { name: "ECDH", namedCurve: "P-256" },
+        true,
+        ["deriveKey"]
+      );
+      
+      // Export public key as raw bytes (65 bytes)
+      const pubKeyBytes = new Uint8Array(
+        await globalThis.crypto.subtle.exportKey("raw", keyPair.publicKey)
+      );
+      
+      // Derive AES key from signature bytes
+      const { deriveKeyFromSignature, encryptPrivateKey } = await import("@/lib/crypto");
+      const aesKey = await deriveKeyFromSignature(signatureBytes);
+      
+      // Encrypt the P-256 private key (PKCS#8 format) with the AES key
+      const encryptedPrivKeyBytes = await encryptPrivateKey(keyPair.privateKey, aesKey);
+      
+      // Convert encrypted private key bytes to a hex string to store in blob_id
+      const encryptedHex = Array.from(encryptedPrivKeyBytes)
+        .map(b => b.toString(16).padStart(2, "0"))
+        .join("");
+        
+      // 3. Publish profile publication on-chain via Sui
+      const { Transaction } = await import("@mysten/sui/transactions");
+      const { PACKAGE_ID, CLOCK_OBJECT_ID } = await import("@/lib/constants");
+      
+      const tx = new Transaction();
+      tx.moveCall({
+        target: `${PACKAGE_ID}::publication::create_publication`,
+        arguments: [
+          tx.pure.vector("u8", Array.from(new TextEncoder().encode(encryptedHex))), // blob_id holding encrypted private key hex
+          tx.pure.vector("u8", Array.from(new TextEncoder().encode(""))), // sha256_hash
+          tx.pure.vector("u8", Array.from(new TextEncoder().encode("DEADDROP_PROFILE"))), // title
+          tx.pure.vector("u8", Array.from(new TextEncoder().encode("Profile"))), // category
+          tx.pure.u64(0), // unlock_at (0 means instantly accessible)
+          tx.pure.vector("u8", Array.from(pubKeyBytes)), // wrapped_key holding P-256 public key bytes
+          tx.pure.address(address), // recipient (ourselves)
+          tx.object(CLOCK_OBJECT_ID),
+        ],
+      });
+      
+      await signAndExecuteTransaction({ transaction: tx });
+      
+      // Reload dashboard
+      await loadPublications();
+    } catch (err) {
+      console.error("Failed to register DeadDrop inbox:", err);
+    } finally {
+      setRegistering(false);
+    }
+  };
+
   const loadPublications = async () => {
     if (!isConnected) return;
     setLoading(true);
     try {
       const data = await getPublicationsByOwner(address);
-      setPublications(data);
+      const profile = data.find(p => p.title === "DEADDROP_PROFILE" && p.publisher.toLowerCase() === address.toLowerCase());
+      setProfilePub(profile || null);
+      
+      const normalPubs = data.filter(p => p.title !== "DEADDROP_PROFILE");
+      setPublications(normalPubs);
     } catch (err) {
       console.error("Failed to load dashboard data:", err);
     } finally {
@@ -65,6 +230,7 @@ export default function DashboardPage() {
 
   useEffect(() => {
     loadPublications();
+    loadSubscriptions();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isConnected, address]);
 
@@ -145,8 +311,14 @@ export default function DashboardPage() {
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div className="space-y-1">
           <h1 className="text-2xl md:text-3xl font-bold tracking-tight text-white">My Publications</h1>
-          <p className="text-sm text-text-secondary">
-            All documents published from your wallet: <span className="font-mono text-accent-secondary">{address.slice(0, 8)}...{address.slice(-8)}</span>
+          <p className="text-sm text-text-secondary flex flex-wrap items-center gap-2">
+            <span>All documents published from your wallet:</span>
+            <span className="font-mono text-accent-secondary">{address.slice(0, 8)}...{address.slice(-8)}</span>
+            {profilePub && (
+              <span className="inline-flex items-center gap-1 text-[10px] bg-accent-primary/15 text-accent-primary px-2 py-0.5 rounded font-mono font-semibold uppercase tracking-wider">
+                <Check size={10} /> Secure Inbox Active
+              </span>
+            )}
           </p>
         </div>
         
@@ -172,6 +344,52 @@ export default function DashboardPage() {
           </Link>
         </div>
       </div>
+
+      {/* Registration Card if Inbox is not active */}
+      {!profilePub && isConnected && (
+        <div className="bg-gradient-to-r from-accent-primary/10 to-accent-secondary/10 border border-accent-primary/20 rounded-2xl p-6 md:p-8 flex flex-col md:flex-row md:items-center justify-between gap-4 shadow-lg animate-fadeIn">
+          <div className="space-y-2">
+            <h2 className="text-lg font-bold text-white flex items-center gap-2">
+              <Key size={20} className="text-accent-primary" />
+              Activate Secure Inbox
+            </h2>
+            <p className="text-xs text-text-secondary max-w-xl leading-relaxed">
+              Enable signature-secured wallet-to-wallet auto-decryption. By activating your inbox, other whistleblowers can target your wallet address directly when publishing time-locked files.
+            </p>
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-text-muted mt-2">
+              <span>Need gas?</span>
+              <a
+                href="https://faucet.testnet.sui.io"
+                target="_blank"
+                rel="noreferrer"
+                className="text-accent-secondary hover:underline inline-flex items-center gap-0.5"
+              >
+                Get Testnet SUI <ExternalLink size={10} />
+              </a>
+              <span className="text-text-muted/40">|</span>
+              <span>Test recipient address:</span>
+              <span className="font-mono text-white select-all bg-white/5 px-1 py-0.2 rounded text-[10px]">
+                0xef840f86eb52e8dccd2d321bffbf34c6151b31dc8daa5e37302908f09044d504
+              </span>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={handleRegisterInbox}
+            disabled={registering}
+            className="btn-primary py-2.5 px-6 text-xs font-semibold flex items-center justify-center gap-1.5 shrink-0"
+          >
+            {registering ? (
+              <>
+                <Loader2 size={14} className="animate-spin" />
+                <span>Activating...</span>
+              </>
+            ) : (
+              <span>Activate Inbox</span>
+            )}
+          </button>
+        </div>
+      )}
 
       {/* Stats Row */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -413,6 +631,259 @@ export default function DashboardPage() {
                 </div>
               );
             })}
+          </div>
+        </div>
+      )}
+
+      {/* Tatum Webhook Notifications Section */}
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <div className="space-y-1">
+            <h2 className="text-xl font-bold tracking-tight text-white flex items-center gap-2">
+              <Layers size={18} className="text-accent-secondary animate-pulse" />
+              Tatum Webhook Notifications
+            </h2>
+            <p className="text-xs text-text-secondary leading-relaxed font-sans">
+              Deploy automated Tatum webhooks to monitor publication status changes on the Sui blockchain.
+            </p>
+          </div>
+          <button
+            onClick={() => setShowSubModal(true)}
+            className="btn-secondary py-2 px-4 text-xs font-semibold flex items-center gap-1.5"
+          >
+            <Plus size={14} />
+            <span>Add Notification Webhook</span>
+          </button>
+        </div>
+
+        {subscriptions.length === 0 ? (
+          <div className="bg-background-card border border-white/5 rounded-xl p-8 text-center text-text-muted text-xs font-mono">
+            No active Tatum notification webhooks found. Webhooks defined during publish appear here.
+          </div>
+        ) : (
+          <div className="bg-background-card border border-white/5 rounded-xl overflow-hidden shadow-2xl">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse font-sans text-xs">
+                <thead>
+                  <tr className="border-b border-white/5 bg-white/[0.02] text-[10px] font-mono text-text-secondary uppercase tracking-wider">
+                    <th className="p-4 font-semibold">Subscription ID</th>
+                    <th className="p-4 font-semibold">Target Address / Publication</th>
+                    <th className="p-4 font-semibold">Webhook URL</th>
+                    <th className="p-4 font-semibold">Status</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-white/5 text-text-secondary">
+                  {subscriptions.map((sub: any) => {
+                    const matchedPub = publications.find(p => p.id === sub.address);
+                    return (
+                      <tr key={sub.id} className="hover:bg-white/[0.01] transition-colors">
+                        <td className="p-4 font-mono select-all text-text-primary text-[11px]">
+                          {sub.id}
+                        </td>
+                        <td className="p-4">
+                          <div className="space-y-0.5">
+                            <span className="font-semibold text-white block">
+                              {matchedPub ? matchedPub.title : "Publication Object"}
+                            </span>
+                            <span className="font-mono text-[10px] text-text-muted block">
+                              {sub.address}
+                            </span>
+                          </div>
+                        </td>
+                        <td className="p-4 font-mono break-all text-[11px]">
+                          {sub.url}
+                        </td>
+                        <td className="p-4">
+                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-mono font-semibold bg-accent-primary/20 text-accent-primary">
+                            <span className="w-1.5 h-1.5 rounded-full bg-accent-primary animate-ping"></span>
+                            ACTIVE
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Tatum Webhook Event Logger & Playground */}
+      <div className="bg-background-card border border-white/5 rounded-xl p-6 space-y-4 shadow-2xl">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="space-y-1">
+            <h3 className="text-base font-bold text-white flex items-center gap-2">
+              <span className="w-2.5 h-2.5 rounded-full bg-accent-secondary animate-pulse inline-block"></span>
+              Live Webhook Event Logger
+            </h3>
+            <p className="text-xs text-text-secondary leading-relaxed">
+              Listen to active Tatum subscriptions firing real-time events. You can also trigger simulated events to preview webhook payloads.
+            </p>
+          </div>
+          <button
+            onClick={handleSimulateWebhookAlert}
+            disabled={simulatingWebhook}
+            className="btn-primary py-2 px-4 text-xs font-semibold flex items-center gap-1.5 shrink-0 bg-accent-secondary/15 border-accent-secondary/20 hover:bg-accent-secondary/25 text-accent-secondary hover:text-white"
+          >
+            {simulatingWebhook ? (
+              <Loader2 size={12} className="animate-spin" />
+            ) : (
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+              </svg>
+            )}
+            <span>Simulate Tatum Webhook</span>
+          </button>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          {/* Logs List */}
+          <div className="border border-white/5 bg-background-secondary rounded-lg h-60 overflow-y-auto divide-y divide-white/5">
+            {webhookLogs.length === 0 ? (
+              <div className="h-full flex flex-col items-center justify-center text-text-muted text-xs font-mono p-4 text-center">
+                <span>Waiting for events...</span>
+                <span className="text-[10px] text-text-muted/60 mt-1">
+                  (Webhooks registered on Tatum will automatically log here, or click Simulate)
+                </span>
+              </div>
+            ) : (
+              webhookLogs.map((log) => (
+                <div
+                  key={log.id}
+                  onClick={() => setSelectedLog(log)}
+                  className={`p-3 text-xs font-mono cursor-pointer transition-colors flex items-center justify-between gap-3 ${
+                    selectedLog?.id === log.id ? "bg-white/5 text-accent-primary" : "hover:bg-white/[0.02] text-text-secondary"
+                  }`}
+                >
+                  <div className="space-y-1 truncate">
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-accent-secondary/10 text-accent-secondary uppercase font-semibold">
+                        {log.type}
+                      </span>
+                      <span className="text-white font-semibold">
+                        {log.payload.publicationTitle || "Object Mutation"}
+                      </span>
+                    </div>
+                    <div className="text-[10px] text-text-muted truncate select-all">
+                      TX: {log.payload.txId}
+                    </div>
+                  </div>
+                  <span className="text-[10px] text-text-muted shrink-0">
+                    {new Date(log.timestamp).toLocaleTimeString()}
+                  </span>
+                </div>
+              ))
+            )}
+          </div>
+
+          {/* Log Preview */}
+          <div className="border border-white/5 bg-background-secondary rounded-lg h-60 flex flex-col overflow-hidden">
+            <div className="border-b border-white/5 bg-white/[0.01] px-4 py-2 flex items-center justify-between text-[10px] font-mono text-text-muted uppercase tracking-wider">
+              <span>Payload Inspector</span>
+              {selectedLog && (
+                <button
+                  onClick={() => {
+                    navigator.clipboard.writeText(JSON.stringify(selectedLog.payload, null, 2));
+                  }}
+                  className="hover:text-accent-primary font-sans lowercase font-semibold"
+                >
+                  Copy JSON
+                </button>
+              )}
+            </div>
+            <div className="flex-1 p-4 font-mono text-[11px] overflow-auto select-all text-accent-primary">
+              {selectedLog ? (
+                <pre>{JSON.stringify(selectedLog.payload, null, 2)}</pre>
+              ) : (
+                <div className="h-full flex items-center justify-center text-text-muted text-xs text-center p-4">
+                  Select a live webhook event from the list to inspect the full Tatum payload.
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Webhook Subscription Modal */}
+      {showSubModal && (
+        <div className="fixed inset-0 bg-background-primary/85 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-fadeIn font-sans">
+          <div className="bg-background-card border border-white/10 rounded-2xl max-w-md w-full p-6 space-y-6 shadow-2xl relative">
+            <button
+              onClick={() => setShowSubModal(false)}
+              className="absolute top-4 right-4 text-text-muted hover:text-text-primary"
+            >
+              <X size={18} />
+            </button>
+
+            <div className="space-y-2">
+              <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                <Plus size={18} className="text-accent-primary" />
+                Subscribe to Publication Webhook
+              </h3>
+              <p className="text-xs text-text-secondary leading-relaxed">
+                Configure a webhook to be notified by Tatum when state transitions happen on this publication object on-chain.
+              </p>
+            </div>
+
+            <form onSubmit={handleCreateSubscription} className="space-y-4">
+              <div className="space-y-1">
+                <label className="text-[10px] text-text-muted uppercase tracking-wider block font-mono">
+                  Select Publication
+                </label>
+                <select
+                  value={subPubId}
+                  onChange={(e) => setSubPubId(e.target.value)}
+                  required
+                  className="w-full bg-background-secondary border border-white/10 rounded-lg px-3 py-2.5 text-xs text-text-primary outline-none focus:border-accent-primary"
+                >
+                  <option value="">-- Choose Publication --</option>
+                  {publications.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.title} ({p.id.slice(0, 10)}...)
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-[10px] text-text-muted uppercase tracking-wider block font-mono">
+                  Webhook URL
+                </label>
+                <input
+                  type="url"
+                  placeholder="https://your-webhook-endpoint.com/api"
+                  value={subWebhookUrl}
+                  onChange={(e) => setSubWebhookUrl(e.target.value)}
+                  required
+                  className="w-full bg-background-secondary border border-white/10 rounded-lg px-3 py-2.5 text-xs font-mono text-text-primary outline-none focus:border-accent-primary"
+                />
+              </div>
+
+              <div className="flex gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowSubModal(false)}
+                  className="btn-secondary py-2.5 flex-1 text-xs font-semibold"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={submittingSub || !subPubId || !subWebhookUrl}
+                  className="btn-primary py-2.5 flex-1 text-xs font-semibold flex items-center justify-center gap-1.5"
+                >
+                  {submittingSub ? (
+                    <>
+                      <Loader2 size={14} className="animate-spin" />
+                      <span>Subscribing...</span>
+                    </>
+                  ) : (
+                    <span>Subscribe</span>
+                  )}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

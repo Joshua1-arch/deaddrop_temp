@@ -1,6 +1,6 @@
-import { generateKey, encryptDocument, sha256 } from './crypto';
+import { generateKey, encryptDocument, sha256, wrapKeyForRecipient } from './crypto';
 import { uploadToWalrus } from './walrus';
-import { createPublication } from './sui';
+import { createPublication, getPublicationsByOwner } from './sui';
 import { PublishParams, PublishResult } from '../types/publication';
 
 export async function publishDocument(
@@ -37,6 +37,31 @@ export async function publishDocument(
     decryptionKey = await generateKey();
   } catch (err: any) {
     throw new Error(`Cryptography key generation failed: ${err.message || err}`);
+  }
+
+  let wrappedKey: Uint8Array | undefined;
+
+  // If recipient address provided, wrap the key
+  if (params.recipientAddress && params.recipientAddress.trim() !== '') {
+    onProgress('encrypting', 'Wrapping key for recipient...');
+    
+    try {
+      const pubs = await getPublicationsByOwner(params.recipientAddress);
+      const profile = pubs.find(p => p.title === "DEADDROP_PROFILE");
+      if (!profile || !profile.wrappedKey) {
+        throw new Error("Recipient has not activated their Secure Inbox yet.");
+      }
+      wrappedKey = await wrapKeyForRecipient(
+        decryptionKey,
+        new Uint8Array(profile.wrappedKey)
+      );
+    } catch (err) {
+      // If key wrapping fails, continue without
+      // recipient — document becomes public after unlock
+      console.warn(
+        '[DeadDrop] Key wrapping failed, continuing without recipient:', err
+      );
+    }
   }
 
   // 4. sha256(fileBytes) -> hash
@@ -79,12 +104,14 @@ export async function publishDocument(
     if (isDev) console.log('[Orchestrator] Minting publication on Sui...');
     const unlockAtMs = new Date(params.unlockAt).getTime();
     
-    const res = await createPublication({
+     const res = await createPublication({
       blobId,
       sha256Hash: realHash, // Store the REAL SHA-256 hash of the original document on-chain
       title: params.title,
       category: params.category,
       unlockAtMs,
+      wrappedKey,
+      recipient: params.recipientAddress,
       signAndExecute
     });
     digest = res.digest;
