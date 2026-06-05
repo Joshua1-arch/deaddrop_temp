@@ -91,6 +91,7 @@ export default function VerifyPage({ params }: VerifyPageProps) {
   const [decryptionError, setDecryptionError] = useState("");
   const [autoDecryptStatus, setAutoDecryptStatus] = useState("");
   const [isAutoDecrypting, setIsAutoDecrypting] = useState(false);
+  const [showManualInput, setShowManualInput] = useState(false);
 
   // Load publication details from Sui blockchain
   useEffect(() => {
@@ -551,42 +552,56 @@ export default function VerifyPage({ params }: VerifyPageProps) {
                   </div>
 
                   {/* Manual input fallback */}
-                  <form onSubmit={handleDecrypt} className="space-y-4 pt-4 border-t border-white/5">
-                    <div className="space-y-2">
-                      <label className="block text-xs font-mono font-semibold uppercase tracking-wider text-text-secondary">
-                        Or enter Decryption Key manually:
-                      </label>
-                      <div className="flex flex-col sm:flex-row gap-2">
-                        <input
-                          type="password"
-                          placeholder="e.g. dd-key-..."
-                          value={decryptionKey}
-                          onChange={(e) => setDecryptionKey(e.target.value)}
-                          className="flex-1 bg-background-secondary border border-white/10 rounded-lg px-4 py-2.5 text-sm text-text-primary placeholder:text-text-muted focus:border-accent-primary outline-none transition-all"
-                        />
-                        <button
-                          type="submit"
-                          disabled={isDecrypting}
-                          className="btn-primary py-2.5 px-6 text-sm font-semibold shrink-0"
-                        >
-                          {isDecrypting ? (
-                            <>
-                              <Loader2 size={16} className="animate-spin" />
-                              <span>Decrypting...</span>
-                            </>
-                          ) : (
-                            <span>Decrypt & View</span>
-                          )}
-                        </button>
-                      </div>
-                    </div>
-                    {decryptionError && (
-                      <div className="flex items-center gap-2 p-3 bg-danger/10 border border-danger/20 rounded-lg text-danger text-xs font-semibold font-mono">
-                        <AlertCircle size={14} className="shrink-0" />
-                        <span>{decryptionError}</span>
-                      </div>
+                  <div className="pt-4 border-t border-white/5 space-y-4">
+                    <button
+                      type="button"
+                      onClick={() => setShowManualInput(!showManualInput)}
+                      className="text-xs font-semibold text-text-secondary hover:text-accent-primary transition-all duration-200 flex items-center gap-1.5 focus:outline-none"
+                    >
+                      <span className="text-[10px] text-text-muted font-mono">{showManualInput ? "▲" : "▼"}</span>
+                      <span>{showManualInput ? "Hide" : "Show"} Manual Decryption Option</span>
+                      <span className="text-[10px] text-text-muted">(Have a raw backup key?)</span>
+                    </button>
+
+                    {showManualInput && (
+                      <form onSubmit={handleDecrypt} className="space-y-4 animate-fadeIn">
+                        <div className="space-y-2">
+                          <label className="block text-xs font-mono font-semibold uppercase tracking-wider text-text-secondary">
+                            Enter Decryption Key manually:
+                          </label>
+                          <div className="flex flex-col sm:flex-row gap-2">
+                            <input
+                              type="password"
+                              placeholder="e.g. dd-key-..."
+                              value={decryptionKey}
+                              onChange={(e) => setDecryptionKey(e.target.value)}
+                              className="flex-1 bg-background-secondary border border-white/10 rounded-lg px-4 py-2.5 text-sm text-text-primary placeholder:text-text-muted focus:border-accent-primary outline-none transition-all"
+                            />
+                            <button
+                              type="submit"
+                              disabled={isDecrypting}
+                              className="btn-primary py-2.5 px-6 text-sm font-semibold shrink-0"
+                            >
+                              {isDecrypting ? (
+                                <>
+                                  <Loader2 size={16} className="animate-spin" />
+                                  <span>Decrypting...</span>
+                                </>
+                              ) : (
+                                <span>Decrypt & View</span>
+                              )}
+                            </button>
+                          </div>
+                        </div>
+                        {decryptionError && (
+                          <div className="flex items-center gap-2 p-3 bg-danger/10 border border-danger/20 rounded-lg text-danger text-xs font-semibold font-mono">
+                            <AlertCircle size={14} className="shrink-0" />
+                            <span>{decryptionError}</span>
+                          </div>
+                        )}
+                      </form>
                     )}
-                  </form>
+                  </div>
                 </div>
               ) : (
                 // Public Document (No Recipient)

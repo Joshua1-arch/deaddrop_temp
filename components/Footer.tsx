@@ -35,6 +35,11 @@ export default function Footer() {
                   Verify Document
                 </Link>
               </li>
+              <li>
+                <Link href="/docs" className="hover:text-accent-primary transition-colors">
+                  Documentation
+                </Link>
+              </li>
             </ul>
           </div>
 

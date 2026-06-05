@@ -3,7 +3,7 @@
 import React, { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Lock, Menu, X, FileText, LayoutDashboard, ShieldCheck } from "lucide-react";
+import { Lock, Menu, X, FileText, LayoutDashboard, ShieldCheck, BookOpen } from "lucide-react";
 import WalletButton from "./WalletButton";
 import { useWallet } from "./WalletProvider";
 
@@ -17,6 +17,7 @@ export default function Navbar() {
   const navLinks = [
     { name: "Verify", href: "/verify/locked-demo", icon: ShieldCheck },
     { name: "Publish", href: "/publish", icon: FileText },
+    { name: "Docs", href: "/docs", icon: BookOpen },
     ...(isConnected ? [{ name: "Dashboard", href: "/dashboard", icon: LayoutDashboard }] : []),
   ];
 
