@@ -62,6 +62,7 @@ Crucially, the decryption key is kept strictly by the user during the time-lock 
 - **On-Chain Clock Time-Locks**: Lock parameters are anchored immutably in a Sui Move contract. The release schedule is guaranteed by the Sui system `Clock` object, making premature decryption mathematically impossible.
 - **Premium UX Dashboard**: Responsive, highly polished dashboard with real-time status badges, search/filter capabilities, live countdown timers, and automatic transaction triggers on expiration.
 - **Multi-Format Magic Bytes Decoder**: Decrypted files are inspected via magic bytes in the browser. PDFs are opened in secure view tabs, images display directly in the UI, and documents render in styled clean readers.
+- **Interactive Documentation Center**: A built-in, tabbed/accordion-based documentation page explaining wallet setup, encryption/decryption mathematics, Move contracts, and Tatum webhook setups in detail.
 
 ---
 
@@ -86,6 +87,7 @@ To bypass the limitation that standard Sui wallets only support signing (Ed25519
    - The recipient clicks **"Decrypt with My Wallet"** and signs the activation message.
    - The signature-derived key decrypts their private P-256 key stored on-chain.
    - The recipient's private key performs ECDH with the ephemeral public key from the on-chain wrapper, deriving the shared secret to decrypt the AES key, which unlocks the document locally.
+   - **Collapsible Manual Decryption Fallback**: Public users are kept on a clean interface with the wallet decryption prompt, while the manual key entry form is hidden behind an expandable **"Advanced Decryption Options"** panel to ensure clear security separation and error prevention.
 
 ---
 
